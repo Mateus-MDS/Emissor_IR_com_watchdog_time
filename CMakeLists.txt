@@ -19,43 +19,40 @@ cmake_minimum_required(VERSION 3.13)
 # Incluir Pico SDK
 include(pico_sdk_import.cmake)
 
-project(Envio_philco C CXX ASM)
+project(Teste_protocolo C CXX ASM)
 
 # Inicializar SDK
 pico_sdk_init()
 
-add_subdirectory(nec_transmit_library)
-add_subdirectory(nec_receive_library)
 # Executável principal
-add_executable(Envio_philco
-    Envio_philco.c
-    custom_ir.c
+add_executable(Teste_protocolo
+    Teste_protocolo.c
+    lib/custom_ir.c
+    lib/ssd1306.c
 )
 
 # Configurar nome e versão
-pico_set_program_name(Envio_philco "Envio_philco")
-pico_set_program_version(Envio_philco "1.0")
+pico_set_program_name(Teste_protocolo "Teste_protocolo")
+pico_set_program_version(Teste_protocolo "1.0")
 
 # Habilitar USB para debug
-pico_enable_stdio_usb(Envio_philco 1)
-pico_enable_stdio_uart(Envio_philco 0)
+pico_enable_stdio_usb(Teste_protocolo 1)
+pico_enable_stdio_uart(Teste_protocolo 0)
 
 
 # Linkar bibliotecas necessárias
-target_link_libraries(Envio_philco
+target_link_libraries(Teste_protocolo
     pico_stdlib
-    hardware_gpio
-    hardware_timer
-    hardware_pio
     hardware_pwm
-    nec_transmit_library
-    nec_receive_library
+    hardware_dma
+    hardware_gpio
+    hardware_i2c
 )
 
 # Incluir diretórios
-target_include_directories(Envio_philco PRIVATE
+target_include_directories(Teste_protocolo PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
 # Gerar arquivos UF2
-pico_add_extra_outputs(Envio_philco)
+pico_add_extra_outputs(Teste_protocolo)

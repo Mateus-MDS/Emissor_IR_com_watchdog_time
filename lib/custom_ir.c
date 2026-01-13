@@ -1,35 +1,32 @@
 /**
- * Biblioteca simples para controle dos sinais via PWM
+ * Biblioteca para controle IR com DMA
+ * Versão SIMPLES - baseada no exemplo de fade com DMA
  */
 
 #include "pico/stdlib.h"
 #include "stdio.h"
-#include "hardware/pio.h"
-#include "hardware/clocks.h"
 #include "hardware/pwm.h"
 #include "hardware/gpio.h"
+#include "hardware/dma.h"
 
-// Definições do protocolo
-#define IR_CARRIER_FREQ 38000  // 38kHz
-#define IR_GPIO_PIN 2          // Pino de saída IR
+// Definições
+#define IR_CARRIER_FREQ 38000
 
-// Estados dos sinais IR
-typedef enum {
-    IR_OFF,
-    IR_ON,
-    IR_TEMP_22,
-    IR_TEMP_20,
-    IR_FAN_1,
-    IR_FAN_2
-} ir_signal_type_t;
+// Variáveis globais PWM e DMA
+static uint pwm_slice;
+static uint pwm_channel;
+static bool ir_initialized = false;
+static int dma_channel = -1;
 
-// Estrutura para armazenar sinais RAW
-typedef struct {
-    const uint16_t* data;
-    size_t length;
-} ir_raw_signal_t;
+// Buffer para níveis PWM (ON/OFF)
+#define MAX_PWM_BUFFER 2048
+static uint16_t pwm_levels[MAX_PWM_BUFFER];
+static uint32_t pwm_count = 0;
 
-// Sinais RAW (do seu código original)
+// ============================================================================
+// SINAIS IR (mantidos do código original)
+// ============================================================================
+
 static const uint16_t rawSignal_off[] = {
     3603, 1758, 360, 1359, 404, 1362, 405, 344, 423, 352, 426, 348, 
     404, 1335, 429, 345, 427, 348, 413, 1338, 404, 1361, 404, 345, 
@@ -74,7 +71,7 @@ static const uint16_t rawSignal_on[] = {
     361, 1396, 343, 1396, 342, 1396, 340, 1398, 340, 416, 368
 };
 
-static const uint16_t temp_para_22[] = {                            
+static const uint16_t temp_para_22[] = {
     3609, 1760, 381, 1338, 403, 1363, 404, 344, 404, 371, 403, 372, 
     404, 1336, 427, 345, 403, 372, 415, 1335, 404, 1362, 405, 344, 
     404, 1360, 404, 344, 404, 371, 403, 1362, 403, 1334, 389, 399, 
@@ -96,29 +93,7 @@ static const uint16_t temp_para_22[] = {
     306, 445, 329, 470, 305, 445, 330, 469, 305, 1444, 303
 };
 
-static const uint16_t temp_para_21[] = {
-    3611, 1759, 413, 1311, 428, 1332, 406, 344, 403, 371, 405, 370, 
-    427, 1336, 405, 345, 427, 347, 445, 1310, 428, 1333, 405, 345, 
-    420, 1343, 405, 344, 426, 349, 427, 1336, 405, 1333, 389, 375, 
-    428, 1335, 406, 1332, 406, 343, 427, 348, 422, 1341, 406, 344, 
-    404, 371, 445, 1308, 429, 345, 427, 347, 426, 349, 427, 348, 
-    425, 349, 427, 348, 421, 354, 444, 345, 427, 347, 412, 363, 
-    426, 348, 427, 348, 405, 370, 403, 371, 427, 348, 445, 344, 
-    428, 346, 410, 1354, 405, 345, 402, 372, 403, 1360, 405, 345, 
-    426, 349, 444, 1308, 429, 1334, 405, 344, 427, 348, 427, 348, 
-    425, 1338, 405, 344, 403, 372, 420, 370, 428, 1334, 405, 344, 
-    427, 1337, 404, 345, 406, 369, 403, 372, 428, 346, 415, 1338, 
-    429, 345, 428, 1311, 429, 348, 427, 1308, 429, 371, 381, 393, 
-    381, 394, 389, 400, 377, 398, 353, 421, 377, 398, 377, 398, 
-    378, 376, 400, 371, 402, 374, 416, 372, 402, 372, 402, 373, 
-    400, 375, 400, 374, 399, 376, 397, 377, 397, 378, 413, 376, 
-    396, 378, 392, 383, 391, 383, 390, 385, 391, 384, 392, 382, 
-    393, 382, 403, 387, 390, 383, 364, 411, 363, 412, 363, 412, 
-    372, 402, 390, 385, 387, 388, 377, 1395, 343, 1395, 366, 389, 
-    362, 1396, 340, 1398, 340, 1398, 341, 1398, 340, 438, 344
-};
-
-static const uint16_t temp_para_20[] = {                             
+static const uint16_t temp_para_20[] = {
     3611, 1759, 364, 1356, 428, 1314, 428, 344, 427, 317, 461, 300, 
     474, 1308, 430, 345, 427, 349, 421, 1327, 405, 1339, 428, 344, 
     412, 1326, 428, 346, 427, 348, 427, 1311, 430, 1312, 386, 424, 
@@ -140,7 +115,7 @@ static const uint16_t temp_para_20[] = {
     337, 1401, 337, 439, 335, 440, 335, 440, 334, 1439, 307
 };
 
-static const uint16_t fan_1[] = {                                   
+static const uint16_t fan_1[] = {
     3612, 1760, 430, 1315, 426, 1288, 446, 353, 426, 349, 426, 349, 
     426, 1284, 449, 354, 425, 350, 433, 1319, 424, 1286, 449, 353, 
     426, 1285, 448, 353, 427, 349, 425, 1285, 448, 1290, 462, 354, 
@@ -162,7 +137,7 @@ static const uint16_t fan_1[] = {
     417, 1295, 439, 362, 415, 361, 414, 338, 434, 1299, 449
 };
 
-static const uint16_t fan_2[] = {                                     
+static const uint16_t fan_2[] = {
     3612, 2002, 181, 1323, 419, 1292, 447, 353, 420, 354, 421, 354, 
     420, 1320, 421, 352, 420, 2108, 420, 1291, 448, 353, 420, 1319, 
     421, 353, 419, 354, 421, 1319, 421, 2105, 419, 1321, 420, 1290, 
@@ -183,199 +158,157 @@ static const uint16_t fan_2[] = {
     421, 1293, 445, 353, 420, 354, 421, 354, 422, 1293, 452
 };
 
-static const uint16_t fan_3[] = {
-    3610, 1759, 434, 1312, 349, 1361, 375, 427, 414, 362, 421, 353, 
-    420, 1291, 372, 430, 422, 353, 436, 1316, 353, 1356, 355, 448, 
-    425, 1284, 358, 446, 426, 349, 425, 1285, 381, 1357, 464, 353, 
-    425, 1285, 411, 1327, 410, 392, 426, 349, 426, 1285, 407, 395, 
-    425, 350, 435, 1316, 417, 358, 425, 350, 425, 349, 426, 349, 
-    425, 350, 425, 350, 424, 351, 435, 353, 425, 350, 423, 351, 
-    423, 352, 423, 352, 421, 353, 420, 355, 419, 356, 438, 350, 
-    422, 353, 414, 1296, 376, 427, 411, 363, 411, 1300, 376, 426, 
-    385, 391, 438, 1286, 378, 1360, 376, 426, 381, 393, 383, 1328, 
-    376, 1363, 401, 400, 381, 394, 439, 350, 382, 1328, 377, 425, 
-    381, 1331, 383, 418, 382, 392, 384, 392, 385, 389, 436, 1289, 
-    404, 397, 389, 1323, 408, 392, 416, 1296, 411, 390, 418, 357, 
-    417, 358, 429, 360, 417, 357, 418, 357, 417, 357, 418, 357, 
-    417, 358, 416, 359, 415, 338, 449, 360, 415, 339, 435, 339, 
-    437, 339, 435, 340, 433, 341, 433, 343, 431, 344, 448, 358, 
-    410, 365, 382, 393, 378, 397, 375, 399, 378, 397, 378, 397, 
-    378, 398, 388, 398, 345, 430, 344, 431, 370, 405, 372, 402, 
-    345, 430, 340, 435, 340, 437, 379, 1370, 343, 1395, 343, 433, 
-    340, 1397, 340, 435, 341, 434, 340, 435, 338, 1404, 342
-};
+// ============================================================================
+// CONVERSÃO: Sinal RAW ? Buffer PWM
+// ============================================================================
 
-static const uint16_t fan_4[] = {                                  // aparece um circulo, e fica mais fraco
-    3605, 3506, 419, 1319, 419, 620, 158, 642, 145, 630, 141, 1307, 
-    419, 619, 159, 2104, 419, 1320, 419, 619, 154, 1320, 420, 619, 
-    154, 646, 111, 1337, 420, 3846, 419, 1319, 419, 595, 178, 622, 
-    153, 1320, 419, 594, 179, 2110, 419, 571, 202, 621, 154, 595, 
-    179, 597, 178, 596, 179, 594, 180, 1437, 105, 596, 200, 596, 
-    179, 573, 202, 570, 204, 571, 204, 545, 230, 1435, 109, 566, 
-    228, 1320, 420, 353, 420, 544, 231, 1320, 419, 353, 420, 2109, 
-    420, 1293, 445, 352, 421, 423, 351, 1321, 419, 1291, 448, 352, 
-    420, 2109, 419, 1291, 448, 352, 421, 1320, 420, 352, 420, 355, 
-    420, 354, 421, 1337, 226, 355, 420, 353, 421, 355, 421, 1319, 
-    421, 351, 422, 353, 421, 1145, 418, 354, 421, 354, 421, 354, 
-    420, 354, 421, 354, 421, 354, 421, 1142, 421, 354, 420, 356, 
-    419, 356, 420, 355, 419, 356, 419, 356, 419, 1143, 420, 355, 
-    421, 354, 421, 354, 421, 354, 420, 354, 422, 353, 422, 353, 
-    432, 356, 422, 353, 423, 352, 423, 352, 423, 351, 424, 351, 
-    424, 350, 425, 350, 435, 1290, 451, 1287, 450, 1288, 450, 352, 
-    426, 349, 425, 350, 449, 326, 449, 1261, 485
-};
+bool prepare_pwm_buffer(const uint16_t* raw_signal, size_t raw_length) {
+    pwm_count = 0;
+    uint16_t pwm_wrap = pwm_hw->slice[pwm_slice].top;
+    uint16_t pwm_on = pwm_wrap / 2;   // 50% duty = carrier ON
+    uint16_t pwm_off = 0;              // 0% duty = carrier OFF
+    
+    for (size_t i = 0; i < raw_length && pwm_count < MAX_PWM_BUFFER; i++) {
+        uint16_t duration_us = raw_signal[i];
+        bool is_on = (i % 2 == 0);  // Par=ON, Ímpar=OFF
+        
+        // Cada ~26us = 1 ciclo PWM em 38kHz
+        uint16_t num_cycles = duration_us / 26;
+        if (num_cycles < 1) num_cycles = 1;
+        
+        uint16_t level = is_on ? pwm_on : pwm_off;
+        
+        for (uint16_t j = 0; j < num_cycles && pwm_count < MAX_PWM_BUFFER; j++) {
+            pwm_levels[pwm_count++] = level;
+        }
+    }
+    
+    return pwm_count > 0;
+}
 
-// Mapeamento dos sinais
-static const ir_raw_signal_t ir_signals[] = {
-    [IR_OFF] = {rawSignal_off, sizeof(rawSignal_off) / sizeof(uint16_t)},
-    [IR_ON] = {rawSignal_on, sizeof(rawSignal_on) / sizeof(uint16_t)},
-    [IR_TEMP_22] = {temp_para_22, sizeof(temp_para_22) / sizeof(uint16_t)},
-    [IR_TEMP_20] = {temp_para_20, sizeof(temp_para_20) / sizeof(uint16_t)},
-    [IR_FAN_1] = {fan_1, sizeof(fan_1) / sizeof(uint16_t)},
-    [IR_FAN_2] = {fan_2, sizeof(fan_2) / sizeof(uint16_t)}
-};
+// ============================================================================
+// INICIALIZAÇÃO
+// ============================================================================
 
-// Variáveis globais para PWM
-static uint pwm_slice;
-static bool ir_initialized = false;
-
-/**
- * Inicializa o sistema IR
- */
 bool custom_ir_init(uint gpio_pin) {
-    // Configurar o pino como saída PWM
+    // Configurar PWM
     gpio_set_function(gpio_pin, GPIO_FUNC_PWM);
     pwm_slice = pwm_gpio_to_slice_num(gpio_pin);
+    pwm_channel = pwm_gpio_to_channel(gpio_pin);
     
-    // Configurar PWM para 38kHz
-    // Clock do sistema = 125MHz
-    // Para 38kHz: 125MHz / 38kHz = ~3289
-    // Usar divisor 64.5 e wrap 50 para aproximar 38kHz
-    pwm_set_clkdiv(pwm_slice, 64.5f);
-    pwm_set_wrap(pwm_slice, 50);
-    pwm_set_chan_level(pwm_slice, PWM_CHAN_A, 15); // 50% duty cycle
+    pwm_config config = pwm_get_default_config();
+    pwm_config_set_clkdiv(&config, 1.0f);
+    
+    // Para 38kHz: 125MHz / 38kHz ? 3289
+    uint16_t wrap_value = (125000000 / IR_CARRIER_FREQ) - 1;
+    pwm_config_set_wrap(&config, wrap_value);
+    
+    pwm_init(pwm_slice, &config, true);
+    pwm_set_chan_level(pwm_slice, pwm_channel, 0);  // Começa desligado
+    
+    // Configurar DMA
+    dma_channel = dma_claim_unused_channel(true);
+    
+    dma_channel_config c = dma_channel_get_default_config(dma_channel);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+    channel_config_set_read_increment(&c, true);    // Lê do buffer sequencialmente
+    channel_config_set_write_increment(&c, false);  // Sempre escreve no mesmo reg PWM
+    channel_config_set_dreq(&c, DREQ_PWM_WRAP0 + pwm_slice);  // Sincroniza com PWM
+    
+    dma_channel_configure(
+        dma_channel,
+        &c,
+        &pwm_hw->slice[pwm_slice].cc,  // Escreve no registrador CC do PWM
+        NULL,   // Origem será definida depois
+        0,      // Contagem será definida depois
+        false   // Não inicia ainda
+    );
     
     ir_initialized = true;
+    
+    printf("IR DMA inicializado: PWM slice=%d, DMA chan=%d\n", pwm_slice, dma_channel);
+    
     return true;
 }
 
-/**
- * Liga o carrier de 38kHz
- */
-static inline void ir_carrier_on() {
-    if (ir_initialized) {
-        pwm_set_enabled(pwm_slice, true);
-    }
-}
+// ============================================================================
+// ENVIO COM DMA
+// ============================================================================
 
-/**
- * Desliga o carrier
- */
-static inline void ir_carrier_off() {
-    if (ir_initialized) {
-        pwm_set_enabled(pwm_slice, false);
-    }
-}
-
-/**
- * Envia um sinal RAW
- */
 void send_raw_signal(const uint16_t* signal, size_t length) {
     if (!ir_initialized) {
+        printf("ERRO: IR não inicializado!\n");
         return;
     }
     
-    bool carrier_state = true; // Começa com carrier ligado
-    
-    for (size_t i = 0; i < length; i++) {
-        if (carrier_state) {
-            ir_carrier_on();
-        } else {
-            ir_carrier_off();
-        }
-        
-        // Delay em microssegundos
-        sleep_us(signal[i]);
-        
-        // Alterna o estado do carrier
-        carrier_state = !carrier_state;
+    // Preparar buffer PWM
+    if (!prepare_pwm_buffer(signal, length)) {
+        printf("ERRO: Falha ao preparar buffer\n");
+        return;
     }
     
-    // Garante que termina com o carrier desligado
-    ir_carrier_off();
+    printf("Transmitindo %lu valores PWM via DMA...", pwm_count);
+    
+    // Configurar e iniciar DMA
+    dma_channel_set_read_addr(dma_channel, pwm_levels, false);
+    dma_channel_set_trans_count(dma_channel, pwm_count, true);  // true = inicia
+    
+    // Aguardar conclusão
+    dma_channel_wait_for_finish_blocking(dma_channel);
+    
+    // Desligar PWM
+    pwm_set_chan_level(pwm_slice, pwm_channel, 0);
+    
+    printf(" OK!\n");
 }
 
-/**
- * Envia um comando específico
- */
-bool send_ir_command(ir_signal_type_t command) {
-    if (!ir_initialized || command >= sizeof(ir_signals) / sizeof(ir_signals[0])) {
-        return false;
-    }
-    
-    const ir_raw_signal_t* signal = &ir_signals[command];
-    send_raw_signal(signal->data, signal->length);
-    
-    return true;
-}
+// ============================================================================
+// FUNÇÕES PÚBLICAS (mantidas iguais)
+// ============================================================================
 
-/**
- * Funções de conveniência para cada comando
- */
 void turn_off_ac() {
-    send_ir_command(IR_OFF);
+    printf("Comando: DESLIGAR AC\n");
+    send_raw_signal(rawSignal_off, sizeof(rawSignal_off) / sizeof(uint16_t));
 }
 
 void turn_on_ac() {
-    send_ir_command(IR_ON);
+    printf("Comando: LIGAR AC\n");
+    send_raw_signal(rawSignal_on, sizeof(rawSignal_on) / sizeof(uint16_t));
 }
 
 void set_temp_22c() {
-    send_ir_command(IR_TEMP_22);
+    printf("Comando: TEMPERATURA 22°C\n");
+    send_raw_signal(temp_para_22, sizeof(temp_para_22) / sizeof(uint16_t));
 }
 
 void set_temp_20c() {
-    send_ir_command(IR_TEMP_20);
+    printf("Comando: TEMPERATURA 20°C\n");
+    send_raw_signal(temp_para_20, sizeof(temp_para_20) / sizeof(uint16_t));
 }
 
 void set_fan_level_1() {
-    send_ir_command(IR_FAN_1);
+    printf("Comando: VENTILADOR NÍVEL 1\n");
+    send_raw_signal(fan_1, sizeof(fan_1) / sizeof(uint16_t));
 }
 
 void set_fan_level_2() {
-    send_ir_command(IR_FAN_2);
+    printf("Comando: VENTILADOR NÍVEL 2\n");
+    send_raw_signal(fan_2, sizeof(fan_2) / sizeof(uint16_t));
 }
 
-/**
- * Exemplo de uso
- */
 void ir_demo() {
-    // Inicializar o sistema IR no pino 2
-    if (!custom_ir_init(IR_GPIO_PIN)) {
-        printf("Erro ao inicializar IR\n");
-        return;
-    }
+    printf("\n=== DEMONSTRAÇÃO IR COM DMA ===\n");
     
-    printf("Sistema IR inicializado. Demonstração:\n");
-    
-    // Ligar o ar condicionado
-    printf("Ligando ar condicionado...\n");
     turn_on_ac();
     sleep_ms(2000);
     
-    // Definir temperatura para 22°C
-    printf("Definindo temperatura para 22°C...\n");
     set_temp_22c();
     sleep_ms(2000);
     
-    // Definir ventilador para nível 1
-    printf("Definindo ventilador para nível 1...\n");
     set_fan_level_1();
     sleep_ms(2000);
     
-    // Desligar
-    printf("Desligando ar condicionado...\n");
     turn_off_ac();
     
-    printf("Demonstração concluída!\n");
+    printf("=== Demonstração concluída! ===\n\n");
 }

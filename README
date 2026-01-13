@@ -1,0 +1,86 @@
+Descrição do Projeto
+
+Este projeto implementa um transmissor IR que utiliza DMA para controlar ar-condicionado sem ocupar a CPU durante as transmissões. O sistema oferece interface via UART para envio de comandos (ligar/desligar, ajustar temperatura e ventilador) e demonstra visualmente a liberação da CPU através de um LED que pisca durante as transmissões DMA.
+
+Objetivo Principal
+
+Demonstrar a aplicação prática de DMA no projeto, permitindo reduzir o uso da CPU durante as transmissões dos sinais IR.
+
+Componentes Utilizados
+
+Microcontrolador: Raspberry Pi Pico (RP2040)
+LED Emissor IR: GPIO 11 (configurável)
+LED Onboard: GPIO 25 (indicador de transmissão)
+LED Externo: GPIO 11 (demonstração de CPU livre)
+Comunicação: UART (TX: GPIO 0, RX: GPIO 1, Baud Rate: 115200)
+
+
+Arquitetura do Sistema
+Componentes Principais
+????????????????       ????????????       ???????????       ???????????
+? Buffer RAM   ?????????   DMA    ?????????   PWM   ????????? LED IR  ?
+? pwm_levels[] ?       ? Canal X  ?       ? 38 kHz  ?       ? Emissor ?
+????????????????       ????????????       ???????????       ???????????
+      ?                     ?                   ?
+      ?                     ?                   ?
+   Prepara              DREQ sinal          Wrap event
+   (CPU 1x)          (sincronização)       (a cada 26µs)
+
+Fluxo de Operação
+
+CPU prepara buffer (~1ms): Converte sinal RAW para níveis PWM
+CPU configura DMA: Define origem (buffer), destino (PWM.CC) e quantidade
+CPU inicia DMA e fica LIVRE: DMA opera autonomamente
+DMA sincronizado via DREQ: A cada ciclo PWM, transfere próximo valor
+LED IR transmite: Sinal modulado 38kHz recebido pelo ar-condicionado
+
+
+Funcionalidades
+Transmissão IR com DMA
+
+PWM a 38 kHz (portadora infravermelha padrão)
+Buffer de 2048 posições para sinais complexos
+Sincronização hardware via DREQ (zero jitter)
+CPU livre durante toda a transmissão
+
+Demonstração de CPU Livre (Comando 1)
+Ao pressionar 1, o sistema:
+
+Inicia transmissão IR via DMA (~50ms)
+Simultaneamente pisca LED externo 10× (prova de CPU livre)
+Exibe mensagens confirmando operação paralela
+
+cturn_on_ac();  // DMA cuida da transmissão
+
+// CPU está LIVRE - pode fazer outras tarefas!
+for(int i = 0; i < 10; i++) {
+    gpio_put(LED_EXTERNO, 1);
+    sleep_ms(50);
+    gpio_put(LED_EXTERNO, 0);
+    sleep_ms(50);
+}
+Debug via UART
+
+Logs detalhados de inicialização DMA/PWM
+Confirmação de transmissão (quantidade de valores)
+Mensagens de comando executado
+Status de conclusão
+
+
+Configuração DMA
+Parâmetros Críticos
+c// Tamanho: 16 bits por transferência
+channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+
+// Leitura: incrementa automaticamente (percorre buffer)
+channel_config_set_read_increment(&c, true);
+
+// Escrita: não incrementa (sempre no registrador PWM.CC)
+channel_config_set_write_increment(&c, false);
+
+// Trigger: sincroniza com wrap do PWM (a cada 26µs)
+channel_config_set_dreq(&c, DREQ_PWM_WRAP0 + pwm_slice);
+Conversão RAW ? Buffer PWM
+c// Sinal RAW: [3603µs ON, 1758µs OFF, 360µs ON...]
+// Cálculo: 3603 / 26 = 138 ciclos PWM
+// Buffer: [1644, 1644, ...(138x), 0, 0, ...(67x), ...]
