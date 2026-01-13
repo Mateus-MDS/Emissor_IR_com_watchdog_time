@@ -79,7 +79,7 @@ Ao pressionar o Botão A, o sistema entra em um loop infinito, deixando de alime
 
 Ao tentar configurar o ar-condicionado para 22°C, o sistema simula um erro de software.
 
-#define FALHA_TEMP_22C 0x02
+- #define FALHA_TEMP_22C 0x02
 
 ### Resultado:
 - Loop infinito sem watchdog_update()
@@ -121,3 +121,4 @@ Essas informações são armazenadas nos Scratch Registers do RP2040 e exibidas 
 ## Vídeo Demonstrativo
 
 Click [AQUI](O link do vídeo irá aqui) para acessar o link do Vídeo Ensaio
+
