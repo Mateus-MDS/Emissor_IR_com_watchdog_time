@@ -120,6 +120,7 @@ Essas informações são armazenadas nos Scratch Registers do RP2040 e exibidas 
 
 ## Vídeo Demonstrativo
 
-Click [AQUI](https://www.youtube.com/watch?v=s4NObRXN48I&feature=youtu.be) para acessar o link do Vídeo Ensaio
+Clique [AQUI](https://www.youtube.com/watch?v=s4NObRXN48I&feature=youtu.be) para acessar o link do Vídeo Ensaio
+
 
 
